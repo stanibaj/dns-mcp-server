@@ -634,5 +634,7 @@ def trace_dns_delegation(domain: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Run the MCP server
-    mcp.run()
+    # Run the MCP server with SSE transport for HTTP/web access
+    # Use transport="sse" for FastMCP Cloud deployment and HTTP clients
+    # Use transport="stdio" only for local MCP clients like Claude Desktop
+    mcp.run(transport="sse")
