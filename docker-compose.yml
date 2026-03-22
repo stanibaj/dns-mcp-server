@@ -1,0 +1,21 @@
+services:
+  dns-mcp-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      # BIND_HOST controls which host interface the port is exposed on:
+      #   127.0.0.1   → localhost only (default)
+      #   100.x.x.x   → Tailscale IP
+      #   0.0.0.0     → all interfaces
+      - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
+    environment:
+      # Inside the container the server always listens on all interfaces
+      # so Docker can route traffic to it regardless of BIND_HOST above.
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 30s
+      start_period: 15s
+      retries: 3
