@@ -1,0 +1,85 @@
+# .github/workflows/image.yml
+#
+# Builds the image on every push and pull request. On main, also pushes it to
+# the homelab Harbor registry (harbor.beefalo-fort.ts.net/apps/dns-mcp-server),
+# which is reachable only over Tailscale. Deploying is not done here:
+# homelab-iac pins the pushed digest (apps/dns-mcp-server/app.yml) and its
+# apply runs the container on vps-03.
+#
+# Repository secrets, synced from Bitwarden by homelab-iac (do not edit by hand):
+#   TS_OAUTH_CLIENT_ID, TS_OAUTH_SECRET  — Tailscale OAuth client, tag:ci-builder
+#   HARBOR_ROBOT_SECRET                  — password of the Harbor robot$apps
+
+name: image
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: harbor.beefalo-fort.ts.net
+  IMAGE: harbor.beefalo-fort.ts.net/apps/dns-mcp-server
+
+jobs:
+  image:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The docker driver builds and pushes through the runner's Docker
+      # daemon, which resolves MagicDNS names. The default docker-container
+      # driver runs BuildKit in its own container with the runner's upstream
+      # DNS and cannot resolve harbor.beefalo-fort.ts.net.
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      # Joins the tailnet as an ephemeral tag:ci-builder node, whose only
+      # grant is svc:harbor tcp:443.
+      - name: Connect to Tailscale
+        if: env.PUSH == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-builder
+
+      - name: Log in to Harbor
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: robot$apps
+          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
+
+      - name: Build (and push) the image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          provenance: false
+
+      - name: Report the digest for homelab-iac
+        if: env.PUSH == 'true'
+        run: |
+          echo "Image: ${IMAGE}@${{ steps.build.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Pin it in homelab-iac apps/dns-mcp-server/app.yml (# dns-mcp-server@${GITHUB_SHA})." >> "$GITHUB_STEP_SUMMARY"
